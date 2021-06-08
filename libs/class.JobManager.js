@@ -84,7 +84,7 @@ class JobManager extends EventEmitter {
 
         _._getBlockTemplate((err, blockTemplate) => {
             if (err) {
-                console.error(`Failed to get block template for new block: ${err}`);
+                console.error(`Failed to get block template for new block: ${JSON.stringify(err)}`);
             }
             else if (blockTemplate) {
                 _._processTemplate(blockTemplate);
@@ -102,9 +102,10 @@ class JobManager extends EventEmitter {
         precon.opt_funct(callback, 'callback');
 
         const _ = this;
+
         _._getBlockTemplate((err, blockTemplate) => {
             if (err) {
-                console.error(`Failed to get block template for job update: ${err}`);
+                console.error(`Failed to get block template for job update: ${JSON.stringify(err)}`);
                 callback && callback(err, _.currentJob);
             }
             else {

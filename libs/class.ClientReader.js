@@ -3,8 +3,11 @@
 const
     precon = require('@mintpond/mint-precon'),
     mu = require('@mintpond/mint-utils'),
+    buffers = require('@mintpond/mint-utils').buffers,
     Share = require('./class.Share'),
     StratumError = require('./class.StratumError');
+
+const EMPTY_BUFFER = Buffer.alloc(0);
 
 
 class ClientReader {
@@ -194,18 +197,18 @@ class ClientReader {
         }
 
         const jobIdHex = _._hex(message.params[1]);
-        const extraNonce2Hex = _._hex(message.params[2]);
-        const nTimeHex = _._hex(message.params[3]);
-        const nonceHex = _._hex(message.params[4]);
+        const nonceBuf = _._toBufferLE(message.params[2]);
+        const headerHashBuf = _._toBuffer(message.params[3]);
+        const mixHashBuf = _._toBuffer(message.params[4]);
 
         const share = new Share({
             client: _._client,
             stratum: _._stratum,
             workerName: workerName,
             jobIdHex: jobIdHex,
-            extraNonce2Hex: extraNonce2Hex,
-            nTimeHex: nTimeHex,
-            nonceHex: nonceHex
+            nonceBuf: nonceBuf,
+            headerHashBuf: headerHashBuf,
+            mixHashBuf: mixHashBuf
         });
 
         const isValid = share.validate();
@@ -235,6 +238,64 @@ class ClientReader {
         }
         else {
             value = '';
+        }
+
+        return value;
+    }
+
+
+    _toBufferLE(val) {
+
+        let value;
+
+        if (Buffer.isBuffer(val)) {
+            // conversion not needed
+            value = val;
+        }
+        else if (mu.isString(val)) {
+
+            if (val.startsWith('0x'))
+                val = val.substr(2);
+
+            try {
+                // convert hex to LE bytes
+                value = buffers.hexToLE(val);
+            }
+            catch (err) {
+                value = EMPTY_BUFFER;
+            }
+        }
+        else {
+            value = EMPTY_BUFFER;
+        }
+
+        return value;
+    }
+
+
+    _toBuffer(val) {
+
+        let value;
+
+        if (Buffer.isBuffer(val)) {
+            // conversion not needed
+            value = val;
+        }
+        else if (mu.isString(val)) {
+
+            if (val.startsWith('0x'))
+                val = val.substr(2);
+
+            try {
+                // convert hex directly to bytes
+                value = Buffer.from(val, 'hex');
+            }
+            catch (err) {
+                value = EMPTY_BUFFER;
+            }
+        }
+        else {
+            value = EMPTY_BUFFER;
         }
 
         return value;

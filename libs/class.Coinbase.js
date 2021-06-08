@@ -5,6 +5,7 @@ const
     precon = require('@mintpond/mint-precon'),
     mu = require('@mintpond/mint-utils'),
     buffers = require('@mintpond/mint-utils').buffers,
+    Client = require('./class.Client'),
     Share = require('./class.Share');
 
 const
@@ -59,21 +60,20 @@ class Coinbase {
 
 
     /**
-     * Use information from a share to serialize coinbase.
+     * Use information from a client to serialize coinbase.
      *
-     * @param share {Share}
+     * @param client {Client}
      * @returns {Buffer}
      */
-    serialize(share) {
-        precon.instanceOf(share, Share, 'share');
+    serialize(client) {
+        precon.notNull(client, 'client');
 
         const _ = this;
         const coinbase1Buf = _.coinbase1Buf;
         const coinbase2Buf = _.coinbase2Buf;
         return Buffer.concat([
             coinbase1Buf,
-            Buffer.from(share.extraNonce1Hex, 'hex'),
-            Buffer.from(share.extraNonce2Hex, 'hex'),
+            Buffer.from(client.extraNonce1Hex),
             coinbase2Buf
         ]);
     }

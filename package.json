@@ -1,24 +1,26 @@
 {
-  "name": "@mintpond/ref-stratum",
-  "version": "0.2.0",
+  "name": "@mintpond/ref-stratum-ravencoin",
+  "version": "0.1.0",
   "description": "Generic reference stratum for testing, experimentation, and demonstration.",
   "main": "index.js",
   "author": "JCThePants",
   "license": "MIT",
   "dependencies": {
+    "@mintpond/hasher-kawpow": "^1.0.0",
     "@mintpond/mint-bitcoin-script": "^1.0.1",
     "@mintpond/mint-merkle": "^1.0.0",
     "@mintpond/mint-precon": "^1.0.0",
     "@mintpond/mint-socket": "^1.0.0",
-    "@mintpond/mint-utils": "^2.0.0"
+    "@mintpond/mint-utils": "^2.0.0",
+    "sha3": "2.1.2"
   },
-  "homepage": "https://github.com/MintPond/ref-stratum",
+  "homepage": "https://github.com/MintPond/ref-stratum-ravencoin",
   "bugs": {
-    "url": "https://github.com/MintPond/ref-stratum/issues"
+    "url": "https://github.com/MintPond/ref-stratum-ravencoin/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/MintPond/ref-stratum.git"
+    "url": "https://github.com/MintPond/ref-stratum-ravencoin.git"
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com/"

@@ -3,8 +3,10 @@
 const
     precon = require('@mintpond/mint-precon'),
     mu = require('@mintpond/mint-utils'),
+    buffers = require('@mintpond/mint-utils').buffers,
     Job = require('./class.Job'),
-    StratumError = require('./class.StratumError');
+    StratumError = require('./class.StratumError'),
+    algorithm = require('./service.algorithm');
 
 
 class ClientWriter {
@@ -52,18 +54,10 @@ class ClientWriter {
         const replyId = args.replyId;
         const subscriptionIdHex = _._client.subscriptionIdHex;
         const extraNonce1Hex = _._client.extraNonce1Hex;
-        const extraNonce2Size = _._client.extraNonce2Size;
 
         _._socket.send({
             id: replyId,
-            result: [
-                [
-                    ['mining.set_difficulty', subscriptionIdHex],
-                    ['mining.notify', subscriptionIdHex]
-                ],
-                extraNonce1Hex,
-                extraNonce2Size
-            ],
+            result: [subscriptionIdHex, extraNonce1Hex],
             error: null
         });
     }
@@ -72,7 +66,7 @@ class ClientWriter {
     miningNotify(args) {
         precon.instanceOf(args.job, Job, 'job');
         precon.boolean(args.cleanJobs, 'cleanJobs');
-        precon.opt_positiveNumber(args.diff, 'diff');
+        precon.positiveNumber(args.diff, 'diff');
 
         const _ = this;
 
@@ -80,27 +74,20 @@ class ClientWriter {
         const cleanJobs = args.cleanJobs;
         const diff = args.diff;
 
-        if (mu.isNumber(diff)) {
-            _._socket.send({
-                id: null,
-                method: 'mining.set_difficulty',
-                params: [diff]
-            });
-        }
+        const nDiff = diff / algorithm.multiplier;
+        const targetBuffer = buffers.packUInt256LE(algorithm.diff1 / nDiff);
 
         _._socket.send({
             id: null,
             method: 'mining.notify',
             params: [
                 /* 0 Job Id        */ job.idHex,
-                /* 1 prevhash      */ job.prevBlockId,
-                /* 2 coinb1        */ job.coinbase.coinbase1Buf.toString('hex'),
-                /* 3 coinb2        */ job.coinbase.coinbase2Buf.toString('hex'),
-                /* 4 merkle_branch */ job.merkleTree.branchHexArr,
-                /* 5 version       */ job.versionHex,
-                /* 6 nbits (diff)  */ job.bitsHex,
-                /* 7 ntime         */ job.curTimeHex,
-                /* 8 clean_jobs    */ cleanJobs
+                /* 1 header hash   */ job.getHeaderHashBuf(_._client).toString('hex'),
+                /* 2 seed hash     */ job.seedHashBuf.toString('hex'),
+                /* 3 min target    */ buffers.leToHex(targetBuffer),
+                /* 4 clean_jobs    */ cleanJobs,
+                /* 4 block height  */ job.height,
+                /* 6 nbits (diff)  */ buffers.leToHex(job.bitsBuf)
             ]
         });
     }

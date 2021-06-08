@@ -1,6 +1,7 @@
 'use strict';
 
 const
+    SHA3 = require('sha3'),
     precon = require('@mintpond/mint-precon'),
     TxMerkleTree = require('@mintpond/mint-merkle').TxMerkleTree,
     mu = require('@mintpond/mint-utils'),
@@ -9,6 +10,8 @@ const
     algorithm = require('./service.algorithm'),
     Coinbase = require('./class.Coinbase'),
     Share = require('./class.Share');
+
+const BLOCK_HEIGHT_BUFFER = Buffer.alloc(4);
 
 
 class Job {
@@ -42,9 +45,16 @@ class Job {
         _._nDiff = algorithm.diff1 / Number(_._targetBi);
         _._pDiff = _._nDiff * algorithm.multiplier;
 
+        _._versionBuf = buffers.packUInt32LE(_._blockTemplate.version);
         _._versionHex = buffers.packUInt32BE(_._blockTemplate.version).toString('hex');
+
+        _._curTimeBuf = buffers.packUInt32LE(_._blockTemplate.curtime);
         _._curTimeHex = buffers.packUInt32BE(_._blockTemplate.curtime).toString('hex');
+
+        _._bitsBuf = buffers.hexToLE(_._blockTemplate.bits);
         _._bitsHex = _._blockTemplate.bits;
+
+        _._prevHashBuf = buffers.hexToLE(_._blockTemplate.previousblockhash);
         _._prevHashHex = _._blockTemplate.previousblockhash;
 
         _._coinbase = _._createCoinbase();
@@ -54,6 +64,36 @@ class Job {
         _._txDataBuf = Buffer.concat(_._blockTemplate.transactions.map(tx => {
             return Buffer.from(tx.data, 'hex');
         }));
+
+        _._epochNumber = _._getEpochNumber(_._height);
+        _._seedHashBuf = _._createSeedHashBuf();
+        _._headerTemplateBuf = Buffer.alloc(80);
+
+        let position = 0;
+
+        /* version    */
+        _.versionBuf.copy(_._headerTemplateBuf, position);
+        position += 4;
+
+        /* prev block   */
+        _.prevHashBuf.copy(_._headerTemplateBuf, position);
+        position += 32;
+
+        /* merkle       */
+        // reserved for merkle root
+        position += 32;
+
+        /* time         */
+        _.curTimeBuf.copy(_._headerTemplateBuf, position);
+        position += 4;
+
+        /* bits         */
+        _.bitsBuf.copy(_._headerTemplateBuf, position);
+        position += 4;
+
+        /* block height */
+        BLOCK_HEIGHT_BUFFER.writeUInt32LE(_.height, 0);
+        BLOCK_HEIGHT_BUFFER.copy(_._headerTemplateBuf, position);
     }
 
 
@@ -111,10 +151,22 @@ class Job {
     get merkleTree() { return this._merkleTree; }
 
     /**
+     * Get the block template version as a LE buffer.
+     * @returns {Buffer}
+     */
+    get versionBuf() { return this._versionBuf; }
+
+    /**
      * Get the block template version in hex.
      * @returns {string}
      */
     get versionHex() { return this._versionHex; }
+
+    /**
+     * Get the block template curtime as a LE buffer.
+     * @returns {Buffer}
+     */
+    get curTimeBuf() { return this._curTimeBuf; }
 
     /**
      * Get the block template curtime in hex.
@@ -123,10 +175,22 @@ class Job {
     get curTimeHex() { return this._curTimeHex; }
 
     /**
+     * Get the block template bits as a LE buffer.
+     * @returns {Buffer}
+     */
+    get bitsBuf() { return this._bitsBuf; }
+
+    /**
      * Get the block template bits in hex.
      * @returns {string}
      */
     get bitsHex() { return this._bitsHex; }
+
+    /**
+     * Get the block template previous block hash as a LE buffer.
+     * @returns {Buffer}
+     */
+    get prevHashBuf() { return this._prevHashBuf; }
 
     /**
      * Get the block template previous block hash in hex.
@@ -141,10 +205,22 @@ class Job {
     get targetBi() { return this._targetBi; }
 
     /**
-     * Transaction data.
+     * Get the block template transaction data as a LE buffer.
      * @returns {Buffer}
      */
     get txDataBuf() { return this._txDataBuf; }
+
+    /**
+     * Get the job epoch number.
+     * @returns {number}
+     */
+    get epochNumber() { return this._epochNumber; }
+
+    /**
+     * Get epoch seed hash.
+     * @returns {Buffer}
+     */
+    get seedHashBuf() { return this._seedHashBuf; }
 
 
     /**
@@ -156,23 +232,66 @@ class Job {
     registerShare(share) {
         precon.instanceOf(share, Share, 'share');
         precon.string(share.extraNonce1Hex, 'extraNonce1Hex');
-        precon.string(share.extraNonce2Hex, 'extraNonce2Hex');
-        precon.string(share.nTimeHex, 'nTimeHex');
         precon.string(share.nonceHex, 'nonceHex');
 
         const _ = this;
         const extraNonce1Hex = share.extraNonce1Hex;
-        const extraNonce2Hex = share.extraNonce2Hex;
-        const nTimeHex = share.nTimeHex;
         const nonceHex = share.nonceHex;
 
-        const submitId = `${nonceHex}:${nTimeHex}${extraNonce1Hex}:${extraNonce2Hex}`;
+        const submitId = `${nonceHex}:${extraNonce1Hex}`;
 
         if (_._submitSet.has(submitId))
             return false;
 
         _._submitSet.add(submitId);
         return true;
+    }
+
+
+    /**
+     * Get hash of block header.
+     *
+     * @param client {Client}
+     * @returns {Buffer}
+     */
+    getHeaderHashBuf(client) {
+        precon.notNull(client, 'client');
+
+        const _ = this;
+        const coinbaseBuf = _.coinbase.serialize(client);
+        const coinbaseHashBuf = buffers.sha256d(coinbaseBuf);
+        const merkleRootBuf = _.merkleTree.withFirstHash(coinbaseHashBuf);
+
+        merkleRootBuf.copy(_._headerTemplateBuf, 36);
+
+        return buffers.reverseBytes(buffers.sha256d(_._headerTemplateBuf));
+    }
+
+
+    /**
+     * Serialize header using share data.
+     *
+     * @param share {Share}
+     * @returns {{coinbaseBuf: Buffer, buffer: Buffer}}
+     */
+    serializeHeader(share) {
+        precon.instanceOf(share, Share, 'share');
+
+        const _ = this;
+
+        const coinbaseBuf = _.coinbase.serialize(share.client);
+        const coinbaseHashBuf = buffers.sha256d(coinbaseBuf);
+        const merkleRootBuf = _.merkleTree.withFirstHash(coinbaseHashBuf);
+
+        const headerBuf = Buffer.alloc(80);
+        _._headerTemplateBuf.copy(headerBuf);
+
+        merkleRootBuf.copy(headerBuf, 36);
+
+        return {
+            buffer: headerBuf,
+            coinbaseBuf: coinbaseBuf
+        };
     }
 
 
@@ -193,6 +312,24 @@ class Job {
             blockTemplate: _._blockTemplate,
             blockBrand: _._stratum.config.blockBrand
         });
+    }
+
+
+    _getEpochNumber(blockHeight) {
+        return Math.floor(blockHeight / algorithm.epochLen);
+    }
+
+
+    _createSeedHashBuf() {
+        const _ = this;
+        let sha3 = new SHA3.SHA3Hash(256);
+        let seedHashBuf = Buffer.alloc(32);
+        for (let i = 0; i < _.epochNumber; i++) {
+            sha3 = new SHA3.SHA3Hash(256);
+            sha3.update(seedHashBuf);
+            seedHashBuf = sha3.digest();
+        }
+        return seedHashBuf;
     }
 }
 

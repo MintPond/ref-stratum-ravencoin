@@ -8,6 +8,12 @@ const
     algorithm = require('./service.algorithm'),
     StratumError = require('./class.StratumError');
 
+const NONCE_SIZE = 8;
+const HEADER_HASH_SIZE = 32;
+const MIX_HASH_SIZE = 32;
+const HASH_OUT_BUFFER = Buffer.alloc(32);
+const MIX_HASH_BUFFER = Buffer.alloc(32);
+
 
 class Share {
 
@@ -19,28 +25,29 @@ class Share {
      * @param args.stratum {Stratum}
      * @param args.workerName {string}
      * @param args.jobIdHex {string}
-     * @param args.extraNonce2Hex {string}
-     * @param args.nTimeHex {string}
-     * @param args.nonceHex {string}
+     * @param args.nonceBuf {Buffer}
+     * @param args.headerHashBuf {Buffer}
+     * @param args.mixHashBuf {Buffer}
      */
     constructor(args) {
         precon.notNull(args.client, 'client');
         precon.notNull(args.stratum, 'stratum');
         precon.string(args.workerName, 'workerName');
         precon.string(args.jobIdHex, 'jobIdHex');
-        precon.string(args.extraNonce2Hex, 'extraNonce2Hex');
-        precon.string(args.nTimeHex, 'nTimeHex');
-        precon.string(args.nonceHex, 'nonceHex');
+        precon.buffer(args.nonceBuf, 'nonceBuf');
+        precon.buffer(args.headerHashBuf, 'headerHashBuf');
+        precon.buffer(args.mixHashBuf, 'mixHashBuf');
 
         const _ = this;
         _._client = args.client;
         _._stratum = args.stratum;
         _._workerName = args.workerName;
         _._jobIdHex = args.jobIdHex;
-        _._extraNonce2Hex = args.extraNonce2Hex;
-        _._nTimeHex = args.nTimeHex;
-        _._nonceHex = args.nonceHex;
+        _._nonceBuf = args.nonceBuf;
+        _._headerHashBuf = args.headerHashBuf;
+        _._mixHashBuf = args.mixHashBuf;
 
+        _._nonceHex = buffers.leToHex(_._nonceBuf);
         _._stratumDiff = _._client.diff;
         _._shareDiff = 0;
         _._expectedBlocks = 0;
@@ -93,7 +100,7 @@ class Share {
      * Get the mining address of the client that submitted the share.
      * @returns {string}
      */
-    get minerAddress() { return this._client.worker.minerAddress; }
+    get minerAddress() { return this._client.minerAddress; }
 
     /**
      * Get the share difficulty.
@@ -176,12 +183,6 @@ class Share {
     }
 
     /**
-     * Get share nTime as a Buffer
-     * @returns {Buffer}
-     */
-    get nTimeHex() { return this._nTimeHex; }
-
-    /**
      * Get share nonce as a Buffer
      * @returns {Buffer}
      */
@@ -194,10 +195,22 @@ class Share {
     get extraNonce1Hex() { return this._client.extraNonce1Hex; }
 
     /**
-     * Get share extraNonce2 as a Buffer
+     * Get share nonce as a Buffer
      * @returns {Buffer}
      */
-    get extraNonce2Hex() { return this._extraNonce2Hex; }
+    get nonceBuf() { return this._nonceBuf; }
+
+    /**
+     * Get header hash
+     * @returns {Buffer}
+     */
+    get headerHashBuf() { return this._headerHashBuf; }
+
+    /**
+     * Get Mix hash
+     * @returns {Buffer}
+     */
+    get mixHashBuf() { return this._mixHashBuf; }
 
 
     /**
@@ -221,33 +234,48 @@ class Share {
         if (!_._job)
             return _._setError(StratumError.STALE_SHARE);
 
-        // check nonce size
-        if (_._isInvalidNonceSize())
-            return false;
-
-        // check extraNonce2 size
-        if (_._isInvalidExtraNonce2Size())
-            return false;
-
-        // check time size
-        if (_._isInvalidTimeSize())
-            return false;
-
-        // check time range
-        if (_._isInvalidTimeRange())
-            return false;
-
         // check duplicate share
         if (_._isDuplicateShare())
             return false;
 
+        // check nonce size
+        if (_._isInvalidNonceSize())
+            return false;
+
+        // check nonce prefix
+        if (_._isInvalidNoncePrefix())
+            return false;
+
+        if (_._isInvalidHashHeaderSize())
+            return false;
+
+        if (_._isInvalidMixHeaderSize())
+            return false;
+
+        const headerHashBuf = _._job.getHeaderHashBuf(_._client);
+
+        if (_._isHeaderMismatched(headerHashBuf, _._headerHashBuf))
+            return false;
+
+        const isValid = algorithm.verify(
+            /* header hash */ headerHashBuf,
+            /* nonce       */ _._nonceBuf,
+            /* height      */ _._job.height,
+            /* mix hash    */ _._mixHashBuf,
+            /* hash output */ HASH_OUT_BUFFER);
+
+        if (!isValid)
+            return _._setError(StratumError.PROGPOW_VERIFY_FAILED);
+
         // check valid block
-        const header = _._validateBlock();
+        const hashBi = bi.fromBufferBE(HASH_OUT_BUFFER);
+        _._shareDiff = algorithm.diff1 / Number(hashBi) * algorithm.multiplier;
+        _._isValidBlock = _._job.targetBi >= hashBi;
 
         if (_._isValidBlock) {
 
-            _._blockHex = _._serializeBlock(header).toString('hex');
-            _._blockId = header.hash;
+            _._blockHex = _._serializeBlock().toString('hex');
+            _._blockId = HASH_OUT_BUFFER.toString('hex');
 
             console.log(`Winning nonce submitted: ${_._blockId}`);
         }
@@ -281,6 +309,7 @@ class Share {
             isValidBlock: _.isValidBlock,
             isValidShare: _.isValidShare,
             isBlockAccepted: _.isBlockAccepted,
+            nonceHex: _.nonceHex,
             error: _.error,
             blockHex: _.blockHex,
             blockId: _.blockId,
@@ -297,39 +326,8 @@ class Share {
 
     _isInvalidNonceSize() {
         const _ = this;
-        if (_._nonceHex.length !== 8) {
+        if (_._nonceBuf.length !== NONCE_SIZE) {
             _._setError(StratumError.INCORRECT_NONCE_SIZE);
-            return true;
-        }
-        return false;
-    }
-
-
-    _isInvalidExtraNonce2Size() {
-        const _ = this;
-        if (_._extraNonce2Hex.length !== 8) {
-            _._setError(StratumError.INCORRECT_EXTRANONCE2_SIZE);
-            return true;
-        }
-        return false;
-    }
-
-
-    _isInvalidTimeSize() {
-        const _ = this;
-        if (_._nTimeHex.length !== 8) {
-            _._setError(StratumError.INCORRECT_TIME_SIZE);
-            return true;
-        }
-        return false;
-    }
-
-
-    _isInvalidTimeRange() {
-        const _ = this;
-        const nTimeInt = parseInt(_._nTimeHex, 16);
-        if (nTimeInt < _._job.blockTemplate.curtime || nTimeInt > _._submitTime + 7200) {
-            _._setError(StratumError.TIME_OUT_OF_RANGE);
             return true;
         }
         return false;
@@ -340,6 +338,48 @@ class Share {
         const _ = this;
         if (!_._job.registerShare(_)) {
             _._setError(StratumError.DUPLICATE_SHARE);
+            return true;
+        }
+        return false;
+    }
+
+
+    _isInvalidNoncePrefix() {
+        const _ = this;
+        const prefixBuf = buffers.hexToLE(_.client.extraNonce1Hex);
+        const prefix2Buf = _._nonceBuf.slice(-prefixBuf.length);
+        if (Buffer.compare(prefixBuf, prefix2Buf) !== 0) {
+            _._setError(StratumError.INCORRECT_NONCE_PREFIX);
+            return true;
+        }
+        return false;
+    }
+
+
+    _isInvalidHashHeaderSize() {
+        const _ = this;
+        if (_._headerHashBuf.length !== HEADER_HASH_SIZE) {
+            _._setError(StratumError.PROGPOW_INCORRECT_HEADER_HASH_SIZE);
+            return true;
+        }
+        return false;
+    }
+
+
+    _isInvalidMixHeaderSize() {
+        const _ = this;
+        if (_._mixHashBuf.length !== MIX_HASH_SIZE) {
+            _._setError(StratumError.PROGPOW_INCORRECT_MIX_HASH_SIZE);
+            return true;
+        }
+        return false;
+    }
+
+
+    _isHeaderMismatched(headerHashBuf, shareHeaderHashBuf) {
+        const _ = this;
+        if (headerHashBuf.compare(shareHeaderHashBuf) !== 0) {
+            _._setError(StratumError.PROGPOW_HEADER_HASH_MISMATCH);
             return true;
         }
         return false;
@@ -366,66 +406,14 @@ class Share {
     }
 
 
-    _validateBlock() {
+    _serializeBlock() {
         const _ = this;
-
-        const header = _._serializeHeader();
-        const headerBi = bi.fromBufferLE(header.hash);
-        _._shareDiff = algorithm.diff1 / Number(headerBi) * algorithm.multiplier;
-        _._isValidBlock = _._job.targetBi >= headerBi;
-
-        return header;
-    }
-
-
-    _serializeHeader() {
-        const _ = this;
-
-        const coinbaseBuf = _._job.coinbase.serialize(_);
-        const coinbaseHashBuf = buffers.sha256d(coinbaseBuf);
-
-        const merkleRootBuf = _._job.merkleTree.withFirstHash(coinbaseHashBuf);
-
-        const headerBuf = Buffer.alloc(80);
-        let position = 0;
-
-        /* version    */
-        buffers.hexToLE(_._job.versionHex).copy(headerBuf, position);
-        position += 4;
-
-        /* prev block */
-        buffers.hexToLE(_._job.prevHashHex).copy(headerBuf, position);
-        position += 32;
-
-        /* merkle     */
-        merkleRootBuf.copy(headerBuf, position);
-        position += 32;
-
-        /* time       */
-        buffers.hexToLE(_._nTimeHex).copy(headerBuf, position);
-        position += 4;
-
-        /* bits       */
-        buffers.hexToLE(_._job.bitsHex).copy(headerBuf, position);
-        position += 4;
-
-        /* nonce      */
-        buffers.hexToLE(_._nonceHex).copy(headerBuf, position);
-        //position += 4;
-
-        return {
-            hash: algorithm.hash(headerBuf),
-            buffer: headerBuf,
-            coinbaseBuf: coinbaseBuf
-        };
-    }
-
-
-    _serializeBlock(header) {
-        const _ = this;
+        const header = _._job.serializeHeader(_);
 
         return Buffer.concat([
             /* header           */ header.buffer,
+            /* nonce            */ _._nonceBuf,
+            /* mix hash         */ buffers.reverseBytes(_._mixHashBuf, MIX_HASH_BUFFER),
             /* transaction len  */ buffers.packVarInt(_._job.blockTemplate.transactions.length + 1/* +coinbase */),
             /* coinbase tx      */ header.coinbaseBuf,
             /* transactions     */ _._job.txDataBuf

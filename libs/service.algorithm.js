@@ -1,11 +1,12 @@
 'use strict';
 
-const buffers = require('@mintpond/mint-utils').buffers;
+const kawpow = require('@mintpond/hasher-kawpow');
 
 module.exports = {
     diff1: 0x00000000ffff0000000000000000000000000000000000000000000000000000,
     multiplier: Math.pow(2, 8),
-    hash: inputBuf => {
-        return buffers.sha256d(inputBuf);
+    epochLen: 7500,
+    verify: (headerHashBuf, nonceBuf, blockHeight, mixHashBuf, hashOutBuf) => {
+        return kawpow.verify(headerHashBuf, nonceBuf, blockHeight, mixHashBuf, hashOutBuf);
     }
 };

@@ -10,7 +10,6 @@ const
     Job = require('./class.Job');
 
 const TIMEOUT = 600;
-const EXTRANONCE2_SIZE = 4;
 
 
 class Client extends EventEmitter {
@@ -57,7 +56,6 @@ class Client extends EventEmitter {
         _._isSubscribed = false;
         _._isAuthorized = false;
         _._disconnectReason = '';
-
 
         _._socket.on(TcpSocket.EVENT_MESSAGE_IN, _._onSocketMessageIn.bind(_));
         _._socket.on(TcpSocket.EVENT_MALFORMED_MESSAGE, _._onMalformedMessage.bind(_));
@@ -120,12 +118,6 @@ class Client extends EventEmitter {
      * @returns {string}
      */
     get extraNonce1Hex() { return this._extraNonce1Hex; }
-
-    /**
-     * Get the clients assigned extraNonce2 size.
-     * @returns {number}
-     */
-    get extraNonce2Size() { return EXTRANONCE2_SIZE; }
 
     /**
      * Get the client socket.
